@@ -1,34 +1,49 @@
-from task import input_t, output_t
+#!POPCORN leaderboard gated_deltanet_recompute_w_u
+#!POPCORN gpu B200_Nebius
 
+from task import input_t, output_t
 import torch
 import helion
 import helion.language as hl
+import glob
 
+# Optimization Strategy:
+# 1. Eliminated the redundant double-pass loops.
+# 2. Vectorized the matrix multiplication: 
+#    Instead of doing element-wise accumulation across C, we treat A as a [C, C] tile
+#    and k/v as [C, K]/[C, V] matrices. We scale k and v directly and use hl.dot().
 
-# Per-shape configs: map (B, T, H, K, V) to optimized helion.Config objects.
-# Autotune locally for each shape, then paste the best config here.
-SHAPE_CONFIGS: dict[tuple, helion.Config] = {
-    # Test shapes
-    (1, 64, 2, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: use any config that passes correctness check
-    (2, 128, 4, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: use any config that passes correctness check
-    (1, 256, 4, 64, 128): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: use any config that passes correctness check
-    # Benchmark shapes
-    (1, 64, 1, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (2, 512, 3, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (2, 1024, 3, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (3, 1024, 4, 100, 100): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (4, 1024, 4, 128, 128): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (2, 1536, 4, 128, 128): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
-    (4, 2048, 8, 64, 64): helion.Config(block_sizes=[], num_warps=1, num_stages=1),  # TODO: replace with your autotuned config
+acf_files = glob.glob("/opt/booster_pack/recompute_w_u_fwd_*.acf")
+
+config_params = {
+    "block_sizes": [], # Using default C=64 block size
+    "num_warps": [2, 4, 8],
+    "num_stages": [2, 3, 4]
 }
 
+if acf_files:
+    config_params["advanced_controls_file"] = acf_files
 
-# Optional: add advanced_controls_file to your Config for extra performance (see docs).
-# Autotune with autotune_search_acf to find the best ACF, then hardcode it:
-#     helion.Config(..., advanced_controls_file="/opt/booster_pack/recompute_w_u_fwd_0.acf")
+TUNE_CONFIG = helion.Config(**config_params)
 
+# --- HARDCODED LEADERBOARD CONFIGS ---
+SHAPE_CONFIGS: dict[tuple, helion.Config] = {
+    # Test shapes
+    (1, 64, 2, 64, 64): helion.Config(block_sizes=[], num_warps=2, num_stages=2),
+    (2, 128, 4, 64, 64): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (1, 256, 4, 64, 128): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    # Benchmark shapes
+    (1, 64, 1, 64, 64): helion.Config(block_sizes=[], num_warps=2, num_stages=2),
+    (2, 512, 3, 64, 64): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (2, 1024, 3, 64, 64): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (3, 1024, 4, 100, 100): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (4, 1024, 4, 128, 128): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (2, 1536, 4, 128, 128): helion.Config(block_sizes=[], num_warps=4, num_stages=2),
+    (4, 2048, 8, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),
+}
 
-# NOTE: This is an intentionally inefficient baseline implementation.
+DEFAULT_CONFIG = helion.Config(block_sizes=[], num_warps=4, num_stages=2)
+
 def _make_kernel(config: helion.Config):
     @helion.kernel(static_shapes=True, dot_precision="ieee", config=config)
     def kernel(
@@ -52,49 +67,39 @@ def _make_kernel(config: helion.Config):
             b_idx = flat_bh.begin // H
             h_idx = flat_bh.begin % H
 
-            w_acc1 = hl.zeros([rt, K], dtype=torch.float32)
-            u_acc1 = hl.zeros([rt, V], dtype=torch.float32)
-            w_acc2 = hl.zeros([rt, K], dtype=torch.float32)
-            u_acc2 = hl.zeros([rt, V], dtype=torch.float32)
+            # Load A tile [C, C]
+            A_tile = A[b_idx, rt, h_idx, :].to(torch.float32)
 
-            for ci in range(C):
-                t_ci = rt.begin + ci
-                a_col = A[b_idx, rt, h_idx, ci].to(torch.float32)
-                coeff_ci = beta[b_idx, t_ci, h_idx].to(torch.float32)
-                decay_ci = torch.exp(g[b_idx, t_ci, h_idx].to(torch.float32))
+            # Load scaling vectors
+            beta_tile = beta[b_idx, rt, h_idx].to(torch.float32)
+            g_tile = g[b_idx, rt, h_idx].to(torch.float32)
+            decay_tile = torch.exp(g_tile)
 
-                k_ci = k[b_idx, t_ci, h_idx, :].to(torch.float32)
-                v_ci = v[b_idx, t_ci, h_idx, :].to(torch.float32)
+            # Load data chunks
+            k_tile = k[b_idx, rt, h_idx, :].to(torch.float32)
+            v_tile = v[b_idx, rt, h_idx, :].to(torch.float32)
 
-                w_acc1 = w_acc1 + a_col[:, None] * (k_ci * coeff_ci * decay_ci)[None, :]
-                u_acc1 = u_acc1 + a_col[:, None] * (v_ci * coeff_ci)[None, :]
+            # Apply element-wise scaling
+            k_scaled = k_tile * (beta_tile * decay_tile)[:, None]
+            v_scaled = v_tile * beta_tile[:, None]
 
-            for ci in range(C - 1, -1, -1):
-                t_ci = rt.begin + ci
-                a_col = A[b_idx, rt, h_idx, ci].to(torch.float32)
-                coeff_ci = beta[b_idx, t_ci, h_idx].to(torch.float32)
-                decay_ci = torch.exp(g[b_idx, t_ci, h_idx].to(torch.float32))
+            # Vectorized matrix multiplication: A @ scaled_vectors
+            w_acc = hl.dot(A_tile, k_scaled)
+            u_acc = hl.dot(A_tile, v_scaled)
 
-                k_ci = k[b_idx, t_ci, h_idx, :].to(torch.float32)
-                v_ci = v[b_idx, t_ci, h_idx, :].to(torch.float32)
-
-                w_acc2 = w_acc2 + a_col[:, None] * (k_ci * coeff_ci * decay_ci)[None, :]
-                u_acc2 = u_acc2 + a_col[:, None] * (v_ci * coeff_ci)[None, :]
-
-            w_out[b_idx, rt, h_idx, :] = ((w_acc1 + w_acc2) * 0.5).to(k.dtype)
-            u_out[b_idx, rt, h_idx, :] = ((u_acc1 + u_acc2) * 0.5).to(v.dtype)
+            w_out[b_idx, rt, h_idx, :] = w_acc.to(k.dtype)
+            u_out[b_idx, rt, h_idx, :] = u_acc.to(v.dtype)
 
         return w_out, u_out
 
     return kernel
 
-
 _KERNELS = {shape: _make_kernel(cfg) for shape, cfg in SHAPE_CONFIGS.items()}
-
+_DEFAULT_KERNEL = _make_kernel(DEFAULT_CONFIG)
 
 def custom_kernel(data: input_t) -> output_t:
     k, v, beta, A, g = data
     B, T, H, K = k.shape
     V = v.shape[-1]
-    kernel = _KERNELS[(B, T, H, K, V)]
+    kernel = _KERNELS.get((B, T, H, K, V), _DEFAULT_KERNEL)
     return kernel(k, v, beta, A, g)
