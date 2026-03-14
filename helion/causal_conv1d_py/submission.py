@@ -8,12 +8,11 @@ import helion
 import helion.language as hl
 import glob
 
-# Optimized Helion Kernel for Causal Depthwise 1D Convolution
-# Features:
-# - F.pad for fast zero-padding
-# - 3D Tiling [Batch, Depth, Sequence] for max B200 occupancy
-# - Register/SRAM caching for weights and bias
-# - Localized accumulation in FP32
+# Optimization Strategy:
+# 1. In-Kernel Padding: Eliminated F.pad memory copies by using hl.load(..., mask=...)
+# 2. 3D Tiling [Batch, Depth, Sequence] for max B200 occupancy
+# 3. Register/SRAM caching for weights and bias
+# 4. Localized accumulation in FP32
 
 # --- HARDCODED LEADERBOARD CONFIGS ---
 # Update these with your tuned outputs after running benchmark on remote
@@ -38,17 +37,18 @@ DEFAULT_CONFIG = helion.Config(block_sizes=[16, 64], num_warps=4, num_stages=2)
 def _make_kernel(config: helion.Config):
     @helion.kernel(static_shapes=True, config=config)
     def kernel(
-        x_pad: torch.Tensor,
+        x: torch.Tensor,
         w: torch.Tensor,
         b: torch.Tensor,
     ) -> torch.Tensor:
-        B, D, L = x_pad.size(0), x_pad.size(1), x_pad.size(2)
+        B, D, S = x.size(0), x.size(1), x.size(2)
         W = hl.specialize(w.size(1))
-        N = L - W + 1
-        y = torch.empty(B, D, N, dtype=x_pad.dtype, device=x_pad.device)
+        
+        # Output size is identical to input size S
+        y = torch.empty(B, D, S, dtype=x.dtype, device=x.device)
 
         # 3D Tiling over Batch, Channel (Depth), and Sequence
-        for rb, rd, rs in hl.tile([B, D, N], block_size=[1, None, None]):
+        for rb, rd, rs in hl.tile([B, D, S], block_size=[1, None, None]):
             bi = rb.begin
             
             # Pre-load bias for this tile of channels
@@ -58,8 +58,16 @@ def _make_kernel(config: helion.Config):
             acc = hl.zeros([rd, rs], dtype=torch.float32)
             
             for j in range(W):
-                # Load input chunk with offset j
-                x_val = hl.load(x_pad, [bi, rd, rs.index + j]).to(torch.float32)
+                # Calculate the causal offset index
+                # At output step `t`, we need inputs from `t - (W - 1)` up to `t`.
+                seq_idx = rs.index + j - (W - 1)
+                
+                # Mask handles the "left padding" dynamically
+                mask = seq_idx >= 0
+                
+                # Load input chunk with mask, defaulting to 0.0 for out-of-bounds
+                x_val = hl.load(x, [bi, rd, seq_idx], mask=mask, other=0.0).to(torch.float32)
+                
                 # Load weight
                 w_val = w[rd, j].to(torch.float32)
                 # Depthwise Multiply-Accumulate
@@ -80,9 +88,6 @@ def custom_kernel(data: input_t) -> output_t:
     B, D, S = x.shape
     W = weight.shape[1]
     
-    # Use F.pad for faster padding
-    padded = F.pad(x, (W - 1, 0))
-    
-    # Dispatch to specialized or default kernel
+    # Dispatch to specialized or default kernel, passing raw x
     kernel = _KERNELS.get((B, D, S, W), _DEFAULT_KERNEL)
-    return kernel(padded, weight, bias)
+    return kernel(x, weight, bias)
