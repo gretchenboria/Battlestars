@@ -48,7 +48,8 @@ SHAPE_CONFIGS: dict[tuple, helion.Config] = {
 }
 
 def _make_kernel(config: helion.Config):
-    @helion.kernel(static_shapes=True, config=config, autotune_search_acf=acf_files)
+    # CRITICAL: Do NOT pass autotune_search_acf or lists here during KernelBot submission
+    @helion.kernel(static_shapes=True, config=config)
     def kernel(
         x_pad: torch.Tensor,
         w: torch.Tensor,
@@ -98,9 +99,7 @@ def custom_kernel(data: input_t) -> output_t:
     # Use F.pad for faster padding than cat
     padded = F.pad(x, (W - 1, 0))
     
-    kernel = _KERNELS.get((B, D, S, W))
-    if kernel is None:
-        # Fallback to TUNE_CONFIG if shape is unknown (helps during autotuning)
-        kernel = _make_kernel(TUNE_CONFIG)
+    # Must use a strictly hardcoded config for KernelBot
+    kernel = _KERNELS[(B, D, S, W)]
         
     return kernel(padded, weight, bias)
