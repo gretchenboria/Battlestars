@@ -68,7 +68,7 @@ def _make_kernel(config: helion.Config):
                 
             # Add bias and cast back to output type
             acc = acc + bias_tile[:, None]
-            y[rb, rd, rs] = acc.to(y.dtype)
+            y[rb, rd, rs] = acc[None, :, :].to(y.dtype)
         return y
     return kernel
 
