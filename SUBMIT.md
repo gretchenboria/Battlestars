@@ -26,16 +26,20 @@ cd helion/causal_conv1d_py
 python ../eval.py test .
 ```
 
-### B. Find Fastest Configs
-Run the benchmark. 
+### B. Find Fastest Configs & Benchmark
+Run the benchmark to see how fast your kernel is.
 ```bash
 python ../eval.py benchmark .
 ```
-At the end of the benchmark run, the terminal will print out the fastest config for each shape, looking like this:
-`One can hardcode the best config and skip autotuning with: @helion.kernel(config=helion.Config(...))`
 
-### C. HARDCODE THE CONFIGS (CRUCIAL!)
+**What to expect:**
+- If the agent has *already* hardcoded the tuned configs for you (like in `causal_conv1d`), the benchmark will just print out the fast execution times (e.g., `0.0302 ms`). **You are ready to submit! Skip to Step 4.**
+- If you are running an untuned kernel that is still autotuning, the terminal will print out the fastest config for each shape at the end of the run, looking like this:
+  `One can hardcode the best config and skip autotuning with: @helion.kernel(config=helion.Config(...))`
+
+### C. HARDCODE THE CONFIGS (If not already done)
 KernelBot will timeout and fail if you submit while autotuning is enabled. 
+If Step 3B printed out new `helion.Config` recommendations, you must:
 1. Open `submission.py` on your remote machine (using `nano submission.py` or `vim submission.py`).
 2. Find the `SHAPE_CONFIGS` dictionary.
 3. Replace the `helion.Config(...)` for each benchmark shape with the fastest config printed in Step 3B.
