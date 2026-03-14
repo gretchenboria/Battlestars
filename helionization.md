@@ -7,7 +7,7 @@ Because the automatic KernelBot evaluation might fail due to server load, this d
 | **1. `fp8_quant`** | ✅ Optimized | - Removed redundant `amax` math (calculated once instead of thrice).<br>- Removed autotune fallbacks to ensure stable evaluation. |
 | **2. `causal_conv1d`** | ✅ Optimized & Tuned | - Switched from `torch.cat` to `F.pad` to bypass expensive memory copies.<br>- **3D Tiling (`[Batch, Depth, Sequence]`)** to maximize B200 SM occupancy.<br>- **Register Caching:** Pre-loaded weights and bias into registers per tile to eliminate redundant global memory reads in the inner convolution loop.<br>- Localized FP32 accumulation.<br>- Hardcoded a full suite of high-performance B200 configurations. |
 | **3. `gated_deltanet_chunk_fwd_h`** | ✅ Optimized | - **Eliminated redundant operations:** Removed duplicate `hl.dot` projections and updates (cut computational overhead in half).<br>- Fixed config block sizing to map cleanly to the tunable `V` dimension.<br>- Accumulates hidden state continuously in FP32 to preserve numerical stability across chunks. |
-| **4. `gated_deltanet_chunk_fwd_o`** | 🟡 Pending | *Awaiting optimization.* |
+| **4. `gated_deltanet_chunk_fwd_o`** | ✅ Optimized | - **Math Simplification:** Applied linear attention trick `exp(g_i - g_j) = exp(g_i) * exp(-g_j)` to scale `Q` and `K` independently, avoiding memory-heavy 2D exponentiation broadcasts.<br>- Removed redundant calculations for `local_out` and `global_out`. |
 | **5. `gated_deltanet_recompute_w_u`** | 🟡 Pending | *Awaiting optimization.* |
 
 ---
