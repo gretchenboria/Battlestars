@@ -54,17 +54,16 @@ def _make_kernel(config: helion.Config):
             # Pre-load bias for this tile of channels
             bias_tile = b[rd].to(torch.float32)
             
-            # Local registers for weights
-            weights = w[rd, :].to(torch.float32)
-            
             # Local accumulator
             acc = hl.zeros([rd, rs], dtype=torch.float32)
             
             for j in range(W):
                 # Load input chunk with offset j
                 x_val = hl.load(x_pad, [bi, rd, rs.index + j]).to(torch.float32)
+                # Load weight
+                w_val = w[rd, j].to(torch.float32)
                 # Depthwise Multiply-Accumulate
-                acc = acc + x_val * weights[:, j, None]
+                acc = acc + x_val * w_val[:, None]
                 
             # Add bias and cast back to output type
             acc = acc + bias_tile[:, None]
