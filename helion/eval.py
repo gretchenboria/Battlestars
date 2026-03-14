@@ -451,6 +451,25 @@ def run_local():
     """
     import yaml
     import builtins
+    import time
+
+    if len(sys.argv) < 3:
+        print("Usage: python eval.py <mode> <problem_dir>", file=sys.stderr)
+        print("  mode: test, benchmark, or both", file=sys.stderr)
+        print("  problem_dir: path to problem directory containing task.yml", file=sys.stderr)
+        return 1
+
+    mode = sys.argv[1]
+    problem_dir = Path(sys.argv[2])
+
+    if mode not in ("test", "benchmark", "both", "profile"):
+        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', 'both', or 'profile'.", file=sys.stderr)
+        return 1
+
+    problem_name = problem_dir.resolve().name
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_path = Path(__file__).parent / "logs" / f"{problem_name}_{mode}_{timestamp}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     class TeeLogger:
         def __init__(self, filename):
@@ -466,21 +485,8 @@ def run_local():
             self.terminal.flush()
             self.log.flush()
 
-    # Capture output into eval.log
-    sys.stdout = TeeLogger("eval.log")
-
-    if len(sys.argv) < 3:
-        print("Usage: python eval.py <mode> <problem_dir>", file=sys.stderr)
-        print("  mode: test, benchmark, or both", file=sys.stderr)
-        print("  problem_dir: path to problem directory containing task.yml", file=sys.stderr)
-        return 1
-
-    mode = sys.argv[1]
-    problem_dir = Path(sys.argv[2])
-
-    if mode not in ("test", "benchmark", "both", "profile"):
-        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', 'both', or 'profile'.", file=sys.stderr)
-        return 1
+    # Capture output into a timestamped log file
+    sys.stdout = TeeLogger(str(log_path))
 
     problem_dir = problem_dir.resolve()
     task_path = problem_dir / "task.yml"
