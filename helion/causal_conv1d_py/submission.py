@@ -18,22 +18,22 @@ import glob
 # --- HARDCODED LEADERBOARD CONFIGS ---
 # Update these with your tuned outputs after running benchmark on remote
 SHAPE_CONFIGS: dict[tuple, helion.Config] = {
-    (1, 64, 64, 4): helion.Config(block_sizes=[1, 32, 64], num_warps=2, num_stages=2),
-    (2, 128, 128, 4): helion.Config(block_sizes=[1, 32, 128], num_warps=4, num_stages=2),
-    (1, 256, 256, 3): helion.Config(block_sizes=[1, 32, 128], num_warps=4, num_stages=2),
-    (1, 128, 64, 8): helion.Config(block_sizes=[1, 32, 64], num_warps=2, num_stages=2),
-    (4, 64, 128, 4): helion.Config(block_sizes=[1, 32, 64], num_warps=2, num_stages=2),
+    (1, 64, 64, 4): helion.Config(block_sizes=[32, 64], num_warps=2, num_stages=2),
+    (2, 128, 128, 4): helion.Config(block_sizes=[32, 128], num_warps=4, num_stages=2),
+    (1, 256, 256, 3): helion.Config(block_sizes=[32, 128], num_warps=4, num_stages=2),
+    (1, 128, 64, 8): helion.Config(block_sizes=[32, 64], num_warps=2, num_stages=2),
+    (4, 64, 128, 4): helion.Config(block_sizes=[32, 64], num_warps=2, num_stages=2),
     
     # Benchmark shapes
-    (1, 768, 512, 4): helion.Config(block_sizes=[1, 32, 128], num_warps=4, num_stages=2),
-    (1, 768, 2048, 4): helion.Config(block_sizes=[1, 32, 256], num_warps=4, num_stages=3),
-    (1, 1536, 2048, 4): helion.Config(block_sizes=[1, 32, 256], num_warps=8, num_stages=3),
-    (1, 2560, 2048, 4): helion.Config(block_sizes=[1, 32, 256], num_warps=8, num_stages=3),
-    (1, 2560, 4096, 4): helion.Config(block_sizes=[1, 32, 256], num_warps=8, num_stages=3),
+    (1, 768, 512, 4): helion.Config(block_sizes=[32, 128], num_warps=4, num_stages=2),
+    (1, 768, 2048, 4): helion.Config(block_sizes=[32, 256], num_warps=4, num_stages=3),
+    (1, 1536, 2048, 4): helion.Config(block_sizes=[32, 256], num_warps=8, num_stages=3),
+    (1, 2560, 2048, 4): helion.Config(block_sizes=[32, 256], num_warps=8, num_stages=3),
+    (1, 2560, 4096, 4): helion.Config(block_sizes=[32, 256], num_warps=8, num_stages=3),
 }
 
 # Safe default for unknown shapes or during autotuning
-DEFAULT_CONFIG = helion.Config(block_sizes=[1, 16, 64], num_warps=4, num_stages=2)
+DEFAULT_CONFIG = helion.Config(block_sizes=[16, 64], num_warps=4, num_stages=2)
 
 def _make_kernel(config: helion.Config):
     @helion.kernel(static_shapes=True, config=config)
