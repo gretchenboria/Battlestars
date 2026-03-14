@@ -478,8 +478,8 @@ def run_local():
     mode = sys.argv[1]
     problem_dir = Path(sys.argv[2])
 
-    if mode not in ("test", "benchmark", "both"):
-        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', or 'both'.", file=sys.stderr)
+    if mode not in ("test", "benchmark", "both", "profile"):
+        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', 'both', or 'profile'.", file=sys.stderr)
         return 1
 
     problem_dir = problem_dir.resolve()
@@ -536,6 +536,15 @@ def run_local():
                 print(f"  Benchmark {idx}: FAIL (correctness)  {bench.spec}")
                 print(f"               {result}")
                 exit_code = 1
+
+    # --- Profiling ---
+    if mode == "profile":
+        benchmarks = [TestCase(args=dict(t), spec=str(t)) for t in task.get("benchmarks", [])]
+        print(f"\nRunning {len(benchmarks)} profiles...")
+        for idx, bench in enumerate(benchmarks):
+            print(f"\n  Profile {idx}: {bench.spec}")
+            report = run_single_profile(bench)
+            print(report)
 
     return exit_code
 
