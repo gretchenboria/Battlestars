@@ -450,6 +450,24 @@ def run_local():
       problem_dir: path to the problem directory containing task.yml
     """
     import yaml
+    import builtins
+
+    class TeeLogger:
+        def __init__(self, filename):
+            self.terminal = sys.stdout
+            self.log = open(filename, "a")
+
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+            self.flush()
+
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+
+    # Capture output into eval.log
+    sys.stdout = TeeLogger("eval.log")
 
     if len(sys.argv) < 3:
         print("Usage: python eval.py <mode> <problem_dir>", file=sys.stderr)
