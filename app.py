@@ -72,5 +72,5 @@ def view_log(filename):
 
 if __name__ == '__main__':
     print("Starting Helion Log Viewer...")
-    print("Open http://127.0.0.1:5000 in your browser.")
-    app.run(debug=True, port=5000)
+    print("Open http://127.0.0.1:8080 in your browser.")
+    app.run(debug=True, port=8080)
