@@ -51,11 +51,11 @@ def _make_kernel(config: helion.Config):
         for rb, rd, rs in hl.tile([B, D, N], block_size=[1, None, None]):
             bi = rb.begin
             
-            # Cache bias and weights for this tile in registers/SRAM
+            # Pre-load bias for this tile of channels
             bias_tile = b[rd].to(torch.float32)
-            weights = hl.zeros([rd, W], dtype=torch.float32)
-            for j in range(W):
-                weights[:, j] = w[rd, j].to(torch.float32)
+            
+            # Local registers for weights
+            weights = w[rd, :].to(torch.float32)
             
             # Local accumulator
             acc = hl.zeros([rd, rs], dtype=torch.float32)
