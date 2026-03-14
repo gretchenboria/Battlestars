@@ -11,19 +11,16 @@ We are working on the `fp8_quant` warm-up problem (100 correctness points, 0 per
 
 ## Instructions & Submission Workflow
 
-The local machine is strictly for code development. All execution, testing, benchmarking, and popcorn submission must happen on the remote Nebius B200 GPU instance.
+**CRITICAL:** The local machine is strictly for code development. All execution, testing, benchmarking, and official submissions **MUST** happen on the remote Nebius B200 GPU instance.
 
-1. **Develop Code:** Write and optimize your Helion kernels locally in `helion/<problem_name>_py/submission.py`.
-   - **CRITICAL NOTE:** ONLY modify `submission.py` (your solution file) in each project. This is the only file that gets evaluated and submitted. Do not modify `reference.py`, `eval.py`, or `task.yml`.
-2. **Push Code:** Commit and push your local changes to the Git repository.
-3. **Sync to GPU Lab:** SSH into the Nebius B200 GPU instance (using `./login.sh`). Pull your latest code from the repository.
-4. **Test & Benchmark on GPU:** (Perform these steps on the SSH session)
-   - **Crucial:** Run `export HELION_AUTOTUNE_PRECOMPILE=spawn` to prevent terminal hangs.
-   - Run validation: `python ../eval.py test .`
-   - Run benchmarking: `export HELION_AUTOTUNE_EFFORT=full` and `python ../eval.py benchmark .`
-5. **Hardcoding Configs:** Take the best `helion.Config(...)` values found during the remote benchmark and manually paste them into the `SHAPE_CONFIGS` dictionary in `submission.py`. Commit and push this updated config.
-6. **Submission:** Run the official leaderboard command from the remote GPU instance:
-   - `popcorn submit --mode leaderboard submission.py`
+For detailed, step-by-step commands to run on your SSH session, see:
+👉 **[SUBMIT.md](./SUBMIT.md)**
+
+### Key Rules
+- **ONLY** modify `submission.py` in each project folder.
+- **NO AUTOTUNE** on KernelBot: Hardcode your `helion.Config` values before final submission.
+- **SPAWN MODE:** Always use `export HELION_AUTOTUNE_PRECOMPILE=spawn` to prevent hangs.
+
 
 ### **Environment Variables & Rules (For Remote GPU)**
 - `HELION_AUTOTUNE_PRECOMPILE=spawn` (Crucial for preventing compiler hangs)
