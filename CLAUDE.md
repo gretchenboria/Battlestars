@@ -4,6 +4,7 @@
 
 ### **The Workflow**
 1. **Setup/Scaffold:** Navigate to `helion/<problem_name>_py` or run `popcorn setup` to get the initial `submission.py` and `task.yml`.
+   - **CRITICAL NOTE:** ONLY modify `submission.py` (your solution file) in each project. This is the only file that gets evaluated and submitted. Do not modify `reference.py`, `eval.py`, or `task.yml`.
 2. **Algorithm Development:**
    - Minimize redundant math (e.g., don't calculate `amax` or `acc` multiple times).
    - Use `hl.tile()` to load data into SRAM once and sliding-window over it.
