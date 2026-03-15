@@ -555,6 +555,121 @@ def run_local():
     return exit_code
 
 
+def run_local():
+    """
+    Local eval mode: reads task.yml from a problem directory, runs correctness tests
+    and benchmarks, prints results to stdout. No Popcorn infrastructure needed.
+
+    Usage: python eval.py <mode> <problem_dir>
+      mode: test, benchmark, both, or profile
+      problem_dir: path to the problem directory containing task.yml
+    """
+    import yaml
+    import builtins
+    import time
+
+    if len(sys.argv) < 3:
+        print("Usage: python eval.py <mode> <problem_dir>", file=sys.stderr)
+        print("  mode: test, benchmark, both, or profile", file=sys.stderr)
+        print("  problem_dir: path to problem directory containing task.yml", file=sys.stderr)
+        return 1
+
+    mode = sys.argv[1]
+    problem_dir = Path(sys.argv[2])
+
+    if mode not in ("test", "benchmark", "both", "profile"):
+        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', 'both', or 'profile'.", file=sys.stderr)
+        return 1
+
+    problem_name = problem_dir.resolve().name
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_path = Path(__file__).parent / "logs" / f"{problem_name}_{mode}_{timestamp}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    class TeeLogger:
+        def __init__(self, filename):
+            self.terminal = sys.stdout
+            self.log = open(filename, "a")
+
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+            self.flush()
+
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+
+    # Capture output into a timestamped log file
+    sys.stdout = TeeLogger(str(log_path))
+
+    problem_dir = problem_dir.resolve()
+    task_path = problem_dir / "task.yml"
+    if not task_path.exists():
+        print(f"Error: task.yml not found in {problem_dir}", file=sys.stderr)
+        return 1
+
+    task = yaml.safe_load(task_path.read_text())
+
+    # chdir into the problem directory so that `from submission import ...` works
+    os.chdir(problem_dir)
+    sys.path.insert(0, str(problem_dir))
+
+    from utils import set_seed
+
+    set_seed(42)
+    exit_code = 0
+
+    # --- Correctness tests ---
+    if mode in ("test", "both"):
+        tests = [TestCase(args=dict(t), spec=str(t)) for t in task.get("tests", [])]
+        print(f"Running {len(tests)} correctness tests...")
+        all_passed = True
+        for idx, test in enumerate(tests):
+            good, message = _run_single_test(test)
+            status = "PASS" if good else "FAIL"
+            print(f"  Test {idx}: {status}  {test.spec}")
+            if not good:
+                print(f"           {message}")
+                all_passed = False
+        if all_passed:
+            print("All tests passed.")
+        else:
+            print("Some tests FAILED.")
+            exit_code = 1
+
+    # --- Benchmarks ---
+    if mode in ("benchmark", "both"):
+        benchmarks = [TestCase(args=dict(t), spec=str(t)) for t in task.get("benchmarks", [])]
+        print(f"\nRunning {len(benchmarks)} benchmarks...")
+
+        # Warmup
+        _run_single_benchmark(benchmarks[0], False, 20)
+
+        for idx, bench in enumerate(benchmarks):
+            result = _run_single_benchmark(bench, False, 100)
+            if isinstance(result, Stats):
+                mean_ms = result.mean / 1e6  # Stats stores ns
+                min_ms = result.best / 1e6
+                max_ms = result.worst / 1e6
+                print(f"  Benchmark {idx}: {mean_ms:.4f} ms (min={min_ms:.4f}, max={max_ms:.4f})  {bench.spec}")
+            else:
+                print(f"  Benchmark {idx}: FAIL (correctness)  {bench.spec}")
+                print(f"               {result}")
+                exit_code = 1
+
+    # --- Profiling ---
+    if mode == "profile":
+        benchmarks = [TestCase(args=dict(t), spec=str(t)) for t in task.get("benchmarks", [])]
+        print(f"\nRunning {len(benchmarks)} profiles...")
+        for idx, bench in enumerate(benchmarks):
+            print(f"\n  Profile {idx}: {bench.spec}")
+            report = run_single_profile(bench)
+            print(report)
+
+    return exit_code
+
+
 def main():
     fd = os.getenv("POPCORN_FD")
     if not fd:
