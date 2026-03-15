@@ -450,6 +450,8 @@ def run_local():
       problem_dir: path to the problem directory containing task.yml
     """
     import yaml
+    import builtins
+    import time
 
     if len(sys.argv) < 3:
         print("Usage: python eval.py <mode> <problem_dir>", file=sys.stderr)
@@ -460,9 +462,31 @@ def run_local():
     mode = sys.argv[1]
     problem_dir = Path(sys.argv[2])
 
-    if mode not in ("test", "benchmark", "both"):
-        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', or 'both'.", file=sys.stderr)
+    if mode not in ("test", "benchmark", "both", "profile"):
+        print(f"Unknown mode '{mode}'. Use 'test', 'benchmark', 'both', or 'profile'.", file=sys.stderr)
         return 1
+
+    problem_name = problem_dir.resolve().name
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_path = Path(__file__).parent / "logs" / f"{problem_name}_{mode}_{timestamp}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    class TeeLogger:
+        def __init__(self, filename):
+            self.terminal = sys.stdout
+            self.log = open(filename, "a")
+
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+            self.flush()
+
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+
+    # Capture output into a timestamped log file
+    sys.stdout = TeeLogger(str(log_path))
 
     problem_dir = problem_dir.resolve()
     task_path = problem_dir / "task.yml"
@@ -518,6 +542,15 @@ def run_local():
                 print(f"  Benchmark {idx}: FAIL (correctness)  {bench.spec}")
                 print(f"               {result}")
                 exit_code = 1
+
+    # --- Profiling ---
+    if mode == "profile":
+        benchmarks = [TestCase(args=dict(t), spec=str(t)) for t in task.get("benchmarks", [])]
+        print(f"\nRunning {len(benchmarks)} profiles...")
+        for idx, bench in enumerate(benchmarks):
+            print(f"\n  Profile {idx}: {bench.spec}")
+            report = run_single_profile(bench)
+            print(report)
 
     return exit_code
 
