@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import json
+import subprocess
 
 app = Flask(__name__)
 LOGS_DIR = Path("helion/logs")
@@ -22,7 +23,6 @@ def parse_benchmarks(content):
     return chart_data
 
 def parse_profiles(content):
-    # Split content by Profile headers
     parts = re.split(r"Profile \d+: (\{.*?\})", content)
     chart_data = []
     
@@ -35,19 +35,14 @@ def parse_profiles(content):
                 shape_dict = eval(shape_str)
                 label = " | ".join(f"{k}={v}" for k, v in shape_dict.items() if k != 'seed')
                 
-                # Extract _helion_kernel CUDA time (it's usually in us or ms)
-                # We look for the row starting with _helion_kernel
                 match = re.search(r"^\s*_helion_kernel\s+(?:[\d\.]+%?\s+){4}[\d\.]+[a-z]+\s+([\d\.]+)(us|ms)\s+([\d\.]+)%", table_str, re.MULTILINE)
                 
                 if match:
                     time_val = float(match.group(1))
                     unit = match.group(2)
                     pct = float(match.group(3))
-                    
-                    # Convert to ms
                     if unit == "us":
                         time_val = time_val / 1000.0
-                        
                     chart_data.append({
                         "label": label,
                         "value": time_val,
@@ -76,7 +71,7 @@ def index():
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; background: #f6f8fa; color: #24292f; }
         .header { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
         .container { display: flex; gap: 20px; }
-        .sidebar { width: 350px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #d0d7de; height: 85vh; overflow-y: auto; }
+        .sidebar { width: 350px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #d0d7de; height: 85vh; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
         .content { flex-grow: 1; background: white; padding: 20px; border-radius: 8px; border: 1px solid #d0d7de; height: 85vh; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
         ul { list-style-type: none; padding: 0; margin: 0; }
         li { margin-bottom: 5px; }
@@ -90,6 +85,11 @@ def index():
         th, td { padding: 10px; border: 1px solid #d0d7de; text-align: left; }
         th { background-color: #f6f8fa; }
         .table-container { display: none; }
+        .run-panel { background: #f6f8fa; padding: 15px; border-radius: 6px; border: 1px solid #d0d7de; }
+        .run-panel select, .run-panel button { width: 100%; padding: 8px; margin-bottom: 10px; border-radius: 4px; border: 1px solid #d0d7de; }
+        .run-panel button { background: #2da44e; color: white; border: none; font-weight: bold; cursor: pointer; }
+        .run-panel button:hover { background: #2c974b; }
+        .run-panel button:disabled { background: #94d3a2; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -102,8 +102,28 @@ def index():
     </div>
     <div class="container">
         <div class="sidebar">
-            <h2>Experiments</h2>
-            <ul id="log-list"></ul>
+            <div class="run-panel">
+                <h3>Run Remote Experiment</h3>
+                <select id="run-mode">
+                    <option value="profile">Profile</option>
+                    <option value="benchmark">Benchmark</option>
+                    <option value="test">Test Correctness</option>
+                </select>
+                <select id="run-problem">
+                    <option value="causal_conv1d_py">causal_conv1d_py</option>
+                    <option value="fp8_quant_py">fp8_quant_py</option>
+                    <option value="gated_deltanet_chunk_fwd_h_py">gated_deltanet_chunk_fwd_h_py</option>
+                    <option value="gated_deltanet_chunk_fwd_o_py">gated_deltanet_chunk_fwd_o_py</option>
+                    <option value="gated_deltanet_recompute_w_u_py">gated_deltanet_recompute_w_u_py</option>
+                </select>
+                <button id="run-btn" onclick="runExperiment()">Run on B200</button>
+                <div id="run-status" style="font-size: 12px; color: #57606a;"></div>
+            </div>
+            
+            <div style="flex-grow: 1; overflow-y: auto;">
+                <h2>Experiments</h2>
+                <ul id="log-list"></ul>
+            </div>
         </div>
         <div class="content">
             <h2 id="log-title">Select an experiment to view</h2>
@@ -126,12 +146,40 @@ def index():
                 <canvas id="experimentChart"></canvas>
             </div>
             
-            <pre id="log-content">Run experiments locally using ./run_experiment.sh to generate new logs.</pre>
+            <pre id="log-content">Select a log from the sidebar, or trigger a new experiment to generate one.</pre>
         </div>
     </div>
     <script>
         let currentLog = null;
         let chartInstance = null;
+
+        async function runExperiment() {
+            const mode = document.getElementById('run-mode').value;
+            const problem = document.getElementById('run-problem').value;
+            const btn = document.getElementById('run-btn');
+            const status = document.getElementById('run-status');
+            
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+            status.textContent = 'SSH connecting to GPU... (may take 1-3 mins depending on mode)';
+            
+            try {
+                const res = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode, problem })
+                });
+                const data = await res.json();
+                status.textContent = 'Experiment finished! Fetching logs now...';
+                fetchLogs(); // Force immediate update
+            } catch (e) {
+                console.error(e);
+                status.textContent = 'Error triggering experiment.';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run on B200';
+            }
+        }
 
         async function fetchLogs() {
             try {
@@ -294,7 +342,23 @@ def api_log(filename):
         "parsed_data": parsed_data
     })
 
+@app.route('/api/run', methods=['POST'])
+def run_experiment():
+    data = request.json
+    mode = data.get('mode')
+    problem = data.get('problem')
+    
+    if not mode or not problem:
+        return jsonify({"error": "Missing mode or problem"}), 400
+        
+    try:
+        # Run the experiment script synchronously; the UI will wait
+        subprocess.run(["./run_experiment.sh", mode, problem], check=True)
+        return jsonify({"status": "success"})
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
-    print("Starting Helion Log Viewer with Chart.js support...")
+    print("Starting Helion Log Viewer with UI Execution...")
     print("Open http://127.0.0.1:8080 in your browser.")
     app.run(debug=True, port=8080)
