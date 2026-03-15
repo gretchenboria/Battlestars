@@ -1,13 +1,13 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, render_template_string
 import os
 from pathlib import Path
 import re
+import json
 
 app = Flask(__name__)
 LOGS_DIR = Path("helion/logs")
 
 def parse_benchmarks(content):
-    # Matches lines like: Benchmark 0: 0.0302 ms (min=0.0301, max=0.0305)  {'B': 1, 'D': 1536, 'S': 2048, 'W': 4, 'seed': 2146}
     pattern = r"Benchmark \d+: ([\d\.]+) ms .*?  (\{.*\})"
     matches = re.findall(pattern, content)
     chart_data = []
@@ -16,9 +16,52 @@ def parse_benchmarks(content):
             mean_ms = float(mean_ms_str)
             shape_dict = eval(dict_str)
             label = " | ".join(f"{k}={v}" for k, v in shape_dict.items() if k != 'seed')
-            chart_data.append({"label": label, "mean_ms": mean_ms})
+            chart_data.append({"label": label, "value": mean_ms, "metric": "Mean ms"})
         except Exception as e:
-            print(f"Error parsing line: {e}")
+            print(f"Error parsing benchmark line: {e}")
+    return chart_data
+
+def parse_profiles(content):
+    # Split content by Profile headers
+    parts = re.split(r"Profile \d+: (\{.*?\})", content)
+    chart_data = []
+    
+    if len(parts) > 1:
+        for i in range(1, len(parts), 2):
+            try:
+                shape_str = parts[i]
+                table_str = parts[i+1]
+                
+                shape_dict = eval(shape_str)
+                label = " | ".join(f"{k}={v}" for k, v in shape_dict.items() if k != 'seed')
+                
+                # Extract _helion_kernel CUDA time (it's usually in us or ms)
+                # We look for the row starting with _helion_kernel
+                match = re.search(r"^\s*_helion_kernel\s+(?:[\d\.]+%?\s+){4}[\d\.]+[a-z]+\s+([\d\.]+)(us|ms)\s+([\d\.]+)%", table_str, re.MULTILINE)
+                
+                if match:
+                    time_val = float(match.group(1))
+                    unit = match.group(2)
+                    pct = float(match.group(3))
+                    
+                    # Convert to ms
+                    if unit == "us":
+                        time_val = time_val / 1000.0
+                        
+                    chart_data.append({
+                        "label": label,
+                        "value": time_val,
+                        "metric": f"_helion_kernel ms ({pct}%)"
+                    })
+                else:
+                    chart_data.append({
+                        "label": label,
+                        "value": 0,
+                        "metric": "No _helion_kernel found"
+                    })
+            except Exception as e:
+                print(f"Error parsing profile section: {e}")
+                
     return chart_data
 
 @app.route('/')
@@ -53,25 +96,26 @@ def index():
     <div class="header">
         <div>
             <h1>Helion Hackathon Viewer</h1>
-            <p>Live polling enabled. Run your experiments, and logs will appear automatically.</p>
+            <p>Live polling enabled. Automatically parses Benchmarks and Profiles into interactive charts.</p>
         </div>
         <span id="status" style="color: #0969da; font-weight: bold;">Polling active...</span>
     </div>
     <div class="container">
         <div class="sidebar">
-            <h2>Logs</h2>
+            <h2>Experiments</h2>
             <ul id="log-list"></ul>
         </div>
         <div class="content">
-            <h2 id="log-title">Select a log file to view</h2>
+            <h2 id="log-title">Select an experiment to view</h2>
             
             <div class="table-container" id="table-wrapper">
-                <h3>Benchmark Results</h3>
-                <table id="benchmarkTable">
+                <h3 id="table-title">Extracted Data</h3>
+                <table id="dataTable">
                     <thead>
                         <tr>
                             <th>Shape Configuration</th>
-                            <th>Mean Execution Time (ms)</th>
+                            <th>Value</th>
+                            <th>Metric Info</th>
                         </tr>
                     </thead>
                     <tbody></tbody>
@@ -79,7 +123,7 @@ def index():
             </div>
 
             <div class="chart-container" id="chart-wrapper">
-                <canvas id="benchmarkChart"></canvas>
+                <canvas id="experimentChart"></canvas>
             </div>
             
             <pre id="log-content">Run experiments locally using ./run_experiment.sh to generate new logs.</pre>
@@ -130,11 +174,15 @@ def index():
                 const chartWrapper = document.getElementById('chart-wrapper');
                 const tableWrapper = document.getElementById('table-wrapper');
                 
-                if (data.benchmarks && data.benchmarks.length > 0) {
+                if (data.parsed_data && data.parsed_data.length > 0) {
                     chartWrapper.style.display = 'block';
                     tableWrapper.style.display = 'block';
-                    renderTable(data.benchmarks);
-                    renderChart(data.benchmarks);
+                    
+                    document.getElementById('table-title').textContent = 
+                        filename.includes('profile') ? 'Profile Results (_helion_kernel Execution Time)' : 'Benchmark Results (Mean Execution Time)';
+                        
+                    renderTable(data.parsed_data);
+                    renderChart(data.parsed_data, filename.includes('profile'));
                 } else {
                     chartWrapper.style.display = 'none';
                     tableWrapper.style.display = 'none';
@@ -150,36 +198,47 @@ def index():
             }
         }
         
-        function renderTable(benchmarks) {
-            const tbody = document.querySelector('#benchmarkTable tbody');
+        function renderTable(parsed_data) {
+            const tbody = document.querySelector('#dataTable tbody');
             tbody.innerHTML = '';
-            benchmarks.forEach(b => {
+            parsed_data.forEach(d => {
                 const tr = document.createElement('tr');
+                
                 const tdLabel = document.createElement('td');
-                tdLabel.textContent = b.label;
-                const tdTime = document.createElement('td');
-                tdTime.textContent = b.mean_ms.toFixed(4);
+                tdLabel.textContent = d.label;
+                
+                const tdVal = document.createElement('td');
+                tdVal.textContent = d.value.toFixed(4) + ' ms';
+                
+                const tdMetric = document.createElement('td');
+                tdMetric.textContent = d.metric;
+                
                 tr.appendChild(tdLabel);
-                tr.appendChild(tdTime);
+                tr.appendChild(tdVal);
+                tr.appendChild(tdMetric);
                 tbody.appendChild(tr);
             });
         }
 
-        function renderChart(benchmarks) {
-            const ctx = document.getElementById('benchmarkChart').getContext('2d');
+        function renderChart(parsed_data, isProfile) {
+            const ctx = document.getElementById('experimentChart').getContext('2d');
             if (chartInstance) {
                 chartInstance.destroy();
             }
             
+            const chartLabel = isProfile ? '_helion_kernel Time (ms)' : 'Mean Execution Time (ms)';
+            const barColor = isProfile ? 'rgba(218, 9, 105, 0.6)' : 'rgba(9, 105, 218, 0.6)';
+            const borderColor = isProfile ? 'rgba(218, 9, 105, 1)' : 'rgba(9, 105, 218, 1)';
+            
             chartInstance = new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: benchmarks.map(d => d.label),
+                    labels: parsed_data.map(d => d.label),
                     datasets: [{
-                        label: 'Mean Execution Time (ms)',
-                        data: benchmarks.map(d => d.mean_ms),
-                        backgroundColor: 'rgba(9, 105, 218, 0.6)',
-                        borderColor: 'rgba(9, 105, 218, 1)',
+                        label: chartLabel,
+                        data: parsed_data.map(d => d.value),
+                        backgroundColor: barColor,
+                        borderColor: borderColor,
                         borderWidth: 1
                     }]
                 },
@@ -223,14 +282,19 @@ def api_log(filename):
         return jsonify({"error": "File not found"}), 404
         
     content = file_path.read_text()
-    benchmarks = parse_benchmarks(content)
+    
+    parsed_data = []
+    if "profile" in filename.lower() or "Profile" in content:
+        parsed_data = parse_profiles(content)
+    elif "benchmark" in filename.lower() or "Benchmark" in content:
+        parsed_data = parse_benchmarks(content)
     
     return jsonify({
         "content": content,
-        "benchmarks": benchmarks
+        "parsed_data": parsed_data
     })
 
 if __name__ == '__main__':
-    print("Starting Helion Log Viewer...")
+    print("Starting Helion Log Viewer with Chart.js support...")
     print("Open http://127.0.0.1:8080 in your browser.")
     app.run(debug=True, port=8080)
