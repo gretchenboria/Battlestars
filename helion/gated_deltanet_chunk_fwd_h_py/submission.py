@@ -58,8 +58,6 @@ def _make_kernel(config: helion.Config):
         B, T, H, K = k.shape
         V = u.shape[-1]
         C = 64
-        K = hl.specialize(K)
-        V = hl.specialize(V)
 
         NT = (T + C - 1) // C
         h_out = torch.empty(B, NT, H, K, V, dtype=k.dtype, device=k.device)
