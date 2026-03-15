@@ -1,3 +1,6 @@
+#!POPCORN leaderboard gated_deltanet_chunk_fwd_o
+#!POPCORN gpu B200_Nebius
+
 from task import input_t, output_t
 
 import torch
@@ -6,29 +9,23 @@ import helion.language as hl
 
 
 # Per-shape configs: map (B, T, H, K, V) to optimized helion.Config objects.
-# Autotune locally for each shape, then paste the best config here.
+# block_sizes=[] because hl.tile block_size is hardcoded to [1, C=64]
 SHAPE_CONFIGS: dict[tuple, helion.Config] = {
-    # Test shapes
-    (1, 64, 2, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: use any config that passes correctness check
-    (2, 128, 4, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: use any config that passes correctness check
-    (1, 256, 4, 64, 128): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: use any config that passes correctness check
-    # Benchmark shapes
-    (1, 64, 1, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (2, 512, 3, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (2, 1024, 3, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (3, 1024, 4, 100, 100): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (4, 1024, 4, 128, 128): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (2, 1536, 4, 128, 128): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
-    (4, 2048, 8, 64, 64): helion.Config(block_sizes=[], num_warps=8, num_stages=2),  # TODO: replace with your autotuned config
+    # Test shapes — autotuned on B200
+    (1, 64,   2,  64,  64): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_2.acf', block_sizes=[], num_stages=2, num_warps=4),
+    (2, 128,  4,  64,  64): helion.Config(block_sizes=[], num_stages=2, num_warps=8),
+    (1, 256,  4,  64, 128): helion.Config(block_sizes=[], num_stages=1, num_warps=8),
+    # Benchmark shapes — autotuned on B200
+    (1, 64,   1,  64,  64): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_4.acf', block_sizes=[], num_stages=2, num_warps=4),
+    (2, 512,  3,  64,  64): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_6.acf', block_sizes=[], num_stages=2, num_warps=8),
+    (2, 1024, 3,  64,  64): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_2.acf', block_sizes=[], num_stages=2, num_warps=4),
+    (3, 1024, 4, 100, 100): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_2.acf', block_sizes=[], num_stages=2, num_warps=8),
+    (4, 1024, 4, 128, 128): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_2.acf', block_sizes=[], num_stages=2, num_warps=8),
+    (2, 1536, 4, 128, 128): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_2.acf', block_sizes=[], num_stages=2, num_warps=8),
+    (4, 2048, 8,  64,  64): helion.Config(advanced_controls_file='/opt/booster_pack/chunk_fwd_o_6.acf', block_sizes=[], num_stages=2, num_warps=8),
 }
 
 
-# Optional: add advanced_controls_file to your Config for extra performance (see docs).
-# Autotune with autotune_search_acf to find the best ACF, then hardcode it:
-#     helion.Config(..., advanced_controls_file="/opt/booster_pack/chunk_fwd_o_0.acf")
-
-
-# NOTE: This is an intentionally inefficient baseline implementation.
 def _make_kernel(config: helion.Config):
     @helion.kernel(static_shapes=True, dot_precision="ieee", config=config)
     def kernel(
@@ -77,7 +74,8 @@ def _make_kernel(config: helion.Config):
     return kernel
 
 
-_KERNELS = {shape: _make_kernel(cfg) for shape, cfg in SHAPE_CONFIGS.items()}
+# Lazy init: only compile kernels on first call to avoid import timeout
+_KERNELS: dict = {}
 
 
 def custom_kernel(data: input_t) -> output_t:
@@ -85,5 +83,8 @@ def custom_kernel(data: input_t) -> output_t:
     B, T, H, K = q.shape
     V = v_new.shape[-1]
     scale = K ** -0.5
-    kernel = _KERNELS[(B, T, H, K, V)]
-    return kernel(q, k, v_new, h, g, scale)
+    shape_key = (B, T, H, K, V)
+    if shape_key not in _KERNELS:
+        cfg = SHAPE_CONFIGS.get(shape_key, helion.Config(block_sizes=[], num_warps=4, num_stages=2))
+        _KERNELS[shape_key] = _make_kernel(cfg)
+    return _KERNELS[shape_key](q, k, v_new, h, g, scale)
