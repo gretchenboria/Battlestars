@@ -1,0 +1,1303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Helion Hackathon — GPU Kernel Profiler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg-primary:    #080c14;
+      --bg-secondary:  #0d1525;
+      --bg-card:       #111827;
+      --bg-card-hover: #162033;
+      --border:        #1e2d45;
+      --border-glow:   #1e3a5f;
+      --cyan:          #00e5ff;
+      --cyan-dim:      #0099bb;
+      --green:         #00ff88;
+      --green-dim:     #00aa55;
+      --purple:        #b57bff;
+      --purple-dim:    #7c3aed;
+      --orange:        #ff9500;
+      --red:           #ff4757;
+      --yellow:        #ffd700;
+      --text-primary:  #e8f4f8;
+      --text-secondary:#7fa8c0;
+      --text-muted:    #3d5a70;
+      --mono:          'JetBrains Mono', 'Fira Code', monospace;
+      --sans:          'Inter', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Scanline overlay ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,229,255,0.012) 2px,
+        rgba(0,229,255,0.012) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Grid background ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(8,12,20,0.92);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 0 40px rgba(0,229,255,0.06);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .logo-mark {
+      width: 36px;
+      height: 36px;
+      border: 2px solid var(--cyan);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .logo-mark::before {
+      content: '';
+      position: absolute;
+      width: 100%;
+      height: 2px;
+      background: var(--cyan);
+      animation: scan 2s linear infinite;
+    }
+
+    @keyframes scan {
+      from { top: -2px; }
+      to   { top: 100%; }
+    }
+
+    .logo-mark svg { width: 18px; height: 18px; fill: var(--cyan); position: relative; z-index: 1; }
+
+    .header-title {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--cyan);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .header-subtitle {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+    }
+
+    .live-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--green);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+
+    .time-display {
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Countdown Banner ── */
+    .countdown-banner {
+      background: linear-gradient(135deg, rgba(181,123,255,0.12), rgba(0,229,255,0.08));
+      border-bottom: 1px solid var(--border);
+      padding: 0.6rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2rem;
+      font-family: var(--mono);
+      position: relative;
+      z-index: 10;
+    }
+
+    .countdown-label {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .countdown-time {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--purple);
+      letter-spacing: 0.08em;
+      text-shadow: 0 0 20px rgba(181,123,255,0.5);
+    }
+
+    .countdown-segment {
+      text-align: center;
+    }
+
+    .countdown-sep {
+      font-size: 1.4rem;
+      color: var(--text-muted);
+      margin-top: -6px;
+    }
+
+    .elapsed-display {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    /* ── Main layout ── */
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    /* ── Section headers ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .section-header h2 {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    .section-line {
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, var(--border), transparent);
+    }
+
+    .section-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+    }
+
+    /* ── Cards base ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      transition: border-color 0.3s, box-shadow 0.3s;
+      animation: fadeInUp 0.5s ease both;
+    }
+
+    .card:hover {
+      border-color: var(--border-glow);
+      box-shadow: 0 0 30px rgba(0,229,255,0.06);
+    }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── Leaderboard grid ── */
+    .leaderboard-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .problem-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      transition: all 0.3s;
+      animation: fadeInUp 0.5s ease both;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .problem-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent-color, var(--cyan)), transparent);
+    }
+
+    .problem-card:hover {
+      border-color: var(--accent-color, var(--cyan));
+      box-shadow: 0 0 24px color-mix(in srgb, var(--accent-color, var(--cyan)) 20%, transparent);
+      transform: translateY(-2px);
+    }
+
+    .problem-card:nth-child(1) { --accent-color: var(--green); animation-delay: 0.05s; }
+    .problem-card:nth-child(2) { --accent-color: var(--cyan);  animation-delay: 0.10s; }
+    .problem-card:nth-child(3) { --accent-color: var(--purple);animation-delay: 0.15s; }
+    .problem-card:nth-child(4) { --accent-color: var(--purple);animation-delay: 0.20s; }
+    .problem-card:nth-child(5) { --accent-color: var(--orange);animation-delay: 0.25s; }
+
+    .problem-name {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+      word-break: break-all;
+    }
+
+    .problem-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 0.75rem;
+    }
+
+    .badge {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0.25em 0.75em;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .badge-submitted {
+      background: rgba(0,255,136,0.12);
+      color: var(--green);
+      border: 1px solid rgba(0,255,136,0.3);
+    }
+
+    .badge-tuning {
+      background: rgba(0,229,255,0.12);
+      color: var(--cyan);
+      border: 1px solid rgba(0,229,255,0.3);
+      animation: glow-badge 2s ease-in-out infinite;
+    }
+
+    @keyframes glow-badge {
+      0%, 100% { box-shadow: none; }
+      50%       { box-shadow: 0 0 10px rgba(0,229,255,0.3); }
+    }
+
+    .badge-progress {
+      background: rgba(255,149,0,0.12);
+      color: var(--orange);
+      border: 1px solid rgba(255,149,0,0.3);
+    }
+
+    .badge-pending {
+      background: rgba(61,90,112,0.2);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .score-display {
+      font-family: var(--mono);
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--accent-color, var(--cyan));
+    }
+
+    .shapes-count {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    .progress-bar-wrap {
+      margin-top: 0.75rem;
+      background: var(--bg-secondary);
+      border-radius: 4px;
+      height: 4px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--accent-color, var(--cyan)), color-mix(in srgb, var(--accent-color, var(--cyan)) 60%, white));
+      transition: width 1s ease;
+    }
+
+    /* ── Two-column layout ── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 1100px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+
+    /* ── Chart card ── */
+    .chart-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      animation: fadeInUp 0.5s ease 0.2s both;
+    }
+
+    .chart-wrapper {
+      position: relative;
+      height: 280px;
+      margin-top: 1rem;
+    }
+
+    /* ── Autotune table ── */
+    .autotune-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      animation: fadeInUp 0.5s ease 0.25s both;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    thead tr th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      border-bottom: 1px solid var(--border);
+      font-weight: 500;
+    }
+
+    tbody tr {
+      transition: background 0.2s;
+    }
+
+    tbody tr:hover {
+      background: var(--bg-card-hover);
+    }
+
+    tbody tr td {
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid rgba(30,45,69,0.5);
+      vertical-align: middle;
+    }
+
+    .td-shape {
+      color: var(--text-secondary);
+      font-size: 0.68rem;
+    }
+
+    .td-time {
+      font-weight: 600;
+    }
+
+    .td-time.best {
+      color: var(--green);
+      text-shadow: 0 0 8px rgba(0,255,136,0.4);
+    }
+
+    .td-time.tbd {
+      color: var(--text-muted);
+    }
+
+    .td-config {
+      color: var(--cyan-dim);
+    }
+
+    .td-acf {
+      color: var(--purple);
+    }
+
+    .td-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 0.35rem;
+    }
+
+    .dot-done    { background: var(--green); }
+    .dot-tuning  { background: var(--cyan); animation: pulse 1.4s ease-in-out infinite; }
+
+    /* ── Mini sparkbar ── */
+    .sparkbar {
+      display: inline-block;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--green);
+      vertical-align: middle;
+      margin-left: 0.5rem;
+      transition: width 1s ease;
+    }
+
+    .sparkbar.tbd {
+      background: var(--border);
+      width: 30px !important;
+    }
+
+    /* ── Config Inspector ── */
+    .config-inspector {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      animation: fadeInUp 0.5s ease 0.35s both;
+    }
+
+    .config-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.2s;
+      user-select: none;
+    }
+
+    .config-header:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .config-header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .config-toggle {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      transition: transform 0.3s;
+    }
+
+    .config-toggle.open {
+      transform: rotate(90deg);
+    }
+
+    .config-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .config-body.open {
+      max-height: 1200px;
+    }
+
+    pre.code-block {
+      padding: 1.5rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.7;
+      color: var(--text-secondary);
+      overflow-x: auto;
+      background: transparent;
+    }
+
+    /* Syntax highlighting classes */
+    .kw  { color: var(--purple); }
+    .str { color: var(--green); }
+    .num { color: var(--cyan); }
+    .cm  { color: var(--text-muted); font-style: italic; }
+    .fn  { color: var(--orange); }
+    .op  { color: var(--text-muted); }
+
+    /* ── Stats row ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      animation: fadeInUp 0.4s ease both;
+    }
+
+    @media (max-width: 900px) {
+      .stats-row { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      text-align: center;
+      transition: all 0.3s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--accent);
+    }
+
+    .stat-card:nth-child(1) { --accent: var(--cyan);   animation-delay: 0.0s; }
+    .stat-card:nth-child(2) { --accent: var(--green);  animation-delay: 0.05s; }
+    .stat-card:nth-child(3) { --accent: var(--purple); animation-delay: 0.10s; }
+    .stat-card:nth-child(4) { --accent: var(--orange); animation-delay: 0.15s; }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px color-mix(in srgb, var(--accent) 15%, transparent);
+    }
+
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1;
+      margin-bottom: 0.35rem;
+    }
+
+    .stat-label {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 500;
+    }
+
+    /* ── GPU meter ── */
+    .gpu-meters {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .gpu-meter-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .gpu-meter-label {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      width: 80px;
+      flex-shrink: 0;
+    }
+
+    .gpu-meter-track {
+      flex: 1;
+      height: 6px;
+      background: var(--bg-secondary);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .gpu-meter-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .gpu-meter-val {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-secondary);
+      width: 38px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    /* ── Footer ── */
+    footer {
+      position: relative;
+      z-index: 1;
+      text-align: center;
+      padding: 1.5rem 2rem;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Tooltip ── */
+    [data-tooltip] {
+      position: relative;
+      cursor: default;
+    }
+
+    [data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a2a3d;
+      border: 1px solid var(--border-glow);
+      color: var(--text-secondary);
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      padding: 0.35em 0.7em;
+      border-radius: 6px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 200;
+    }
+
+    [data-tooltip]:hover::after {
+      opacity: 1;
+    }
+
+    /* ── Glow text ── */
+    .glow-cyan   { text-shadow: 0 0 12px rgba(0,229,255,0.6); }
+    .glow-green  { text-shadow: 0 0 12px rgba(0,255,136,0.6); }
+    .glow-purple { text-shadow: 0 0 12px rgba(181,123,255,0.6); }
+
+    /* ── Section tag ── */
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      padding: 0.2em 0.6em;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .tag-b200 {
+      background: rgba(181,123,255,0.12);
+      color: var(--purple);
+      border: 1px solid rgba(181,123,255,0.25);
+    }
+
+    .tag-triton {
+      background: rgba(0,229,255,0.10);
+      color: var(--cyan);
+      border: 1px solid rgba(0,229,255,0.2);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 700px) {
+      main { padding: 1rem; }
+      header { padding: 0 1rem; }
+      .countdown-banner { gap: 0.75rem; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ HEADER ═══════════════════════════════ -->
+<header>
+  <div class="header-left">
+    <div class="logo-mark">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="header-title">GPU Kernel Profiler</div>
+      <div class="header-subtitle">Helion Hackathon · B200 Target</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="tag tag-b200">NVIDIA B200</span>
+    <span class="tag tag-triton">Triton</span>
+    <div class="live-indicator">
+      <span class="pulse-dot"></span>
+      <span>LIVE</span>
+    </div>
+    <div class="time-display" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════ COUNTDOWN ═══════════════════════════ -->
+<div class="countdown-banner">
+  <div>
+    <div class="countdown-label">Hackathon Start</div>
+    <div style="font-family:var(--mono);font-size:0.75rem;color:var(--text-secondary)" id="start-display">Mar 14 2026 · 09:00 AM PT</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:0.5rem">
+    <div class="countdown-segment">
+      <div class="countdown-time" id="cd-h">--</div>
+      <div class="countdown-label">hrs</div>
+    </div>
+    <div class="countdown-sep">:</div>
+    <div class="countdown-segment">
+      <div class="countdown-time" id="cd-m">--</div>
+      <div class="countdown-label">min</div>
+    </div>
+    <div class="countdown-sep">:</div>
+    <div class="countdown-segment">
+      <div class="countdown-time" id="cd-s">--</div>
+      <div class="countdown-label">sec</div>
+    </div>
+  </div>
+  <div style="text-align:right">
+    <div class="countdown-label">Deadline</div>
+    <div style="font-family:var(--mono);font-size:0.75rem;color:var(--red)">Mar 14 2026 · 06:00 PM PT</div>
+  </div>
+  <div style="text-align:right">
+    <div class="countdown-label">Elapsed</div>
+    <div class="elapsed-display" id="elapsed">--h --m --s</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ MAIN ════════════════════════════════ -->
+<main>
+
+  <!-- ── Stats Row ── -->
+  <div class="stats-row">
+    <div class="stat-card" data-tooltip="Total GPU kernel problems">
+      <div class="stat-value glow-cyan">5</div>
+      <div class="stat-label">Problems</div>
+    </div>
+    <div class="stat-card" data-tooltip="Kernels fully submitted">
+      <div class="stat-value glow-green">1</div>
+      <div class="stat-label">Submitted</div>
+    </div>
+    <div class="stat-card" data-tooltip="Autotuned shapes for gated_deltanet_chunk_fwd_o">
+      <div class="stat-value glow-purple">4</div>
+      <div class="stat-label">Shapes Tuned</div>
+    </div>
+    <div class="stat-card" data-tooltip="Remaining shapes to tune">
+      <div class="stat-value" style="color:var(--orange)">6</div>
+      <div class="stat-label">In Progress</div>
+    </div>
+  </div>
+
+  <!-- ── Leaderboard ── -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(0,255,136,0.1);">🏆</div>
+      <h2>Leaderboard Status</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="leaderboard-grid">
+
+      <div class="problem-card">
+        <div class="problem-name">fp8_quant</div>
+        <div class="shapes-count">9 shapes · All autotuned</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:100%"></div></div>
+        <div class="problem-meta">
+          <span class="badge badge-submitted">Submitted</span>
+          <span class="score-display">✓ Complete</span>
+        </div>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-name">causal_conv1d</div>
+        <div class="shapes-count">Tuning in progress</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:45%"></div></div>
+        <div class="problem-meta">
+          <span class="badge badge-progress">In Progress</span>
+          <span class="score-display" style="color:var(--orange)">~45%</span>
+        </div>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-name">gated_deltanet<br>_chunk_fwd_o</div>
+        <div class="shapes-count">10 shapes · 4 tuned</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:40%"></div></div>
+        <div class="problem-meta">
+          <span class="badge badge-tuning">Tuning</span>
+          <span class="score-display">4 / 10</span>
+        </div>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-name">gated_deltanet<br>_chunk_fwd_h</div>
+        <div class="shapes-count">Pending autotune</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:5%"></div></div>
+        <div class="problem-meta">
+          <span class="badge badge-pending">Pending</span>
+          <span class="score-display" style="color:var(--text-muted)">—</span>
+        </div>
+      </div>
+
+      <div class="problem-card">
+        <div class="problem-name">gated_deltanet<br>_recompute_w_u</div>
+        <div class="shapes-count">Pending autotune</div>
+        <div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:5%"></div></div>
+        <div class="problem-meta">
+          <span class="badge badge-pending">Pending</span>
+          <span class="score-display" style="color:var(--text-muted)">—</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Charts + Autotune side by side ── -->
+  <div class="two-col">
+
+    <!-- Bar chart -->
+    <div class="chart-card">
+      <div class="section-header" style="margin-bottom:0">
+        <div class="section-icon" style="background:rgba(0,229,255,0.1);">📊</div>
+        <h2>Per-Shape Performance</h2>
+        <div class="section-line"></div>
+        <span style="font-family:var(--mono);font-size:0.6rem;color:var(--text-muted)">gated_deltanet_chunk_fwd_o</span>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="perfChart"></canvas>
+      </div>
+    </div>
+
+    <!-- GPU meters mock -->
+    <div class="chart-card">
+      <div class="section-header" style="margin-bottom:0">
+        <div class="section-icon" style="background:rgba(181,123,255,0.1);">⚡</div>
+        <h2>B200 Utilization Snapshot</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="gpu-meters">
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">SM Util</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-sm"   style="width:0%;background:linear-gradient(90deg,var(--cyan),#00aaff)"></div></div>
+          <span class="gpu-meter-val" id="v-sm">0%</span>
+        </div>
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">Mem BW</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-bw"   style="width:0%;background:linear-gradient(90deg,var(--purple),#e040fb)"></div></div>
+          <span class="gpu-meter-val" id="v-bw">0%</span>
+        </div>
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">L2 Hit</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-l2"   style="width:0%;background:linear-gradient(90deg,var(--green),#00e5d0)"></div></div>
+          <span class="gpu-meter-val" id="v-l2">0%</span>
+        </div>
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">Reg / thr</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-reg"  style="width:0%;background:linear-gradient(90deg,var(--orange),#ff6b35)"></div></div>
+          <span class="gpu-meter-val" id="v-reg">0</span>
+        </div>
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">Occupancy</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-occ"  style="width:0%;background:linear-gradient(90deg,var(--cyan-dim),var(--cyan))"></div></div>
+          <span class="gpu-meter-val" id="v-occ">0%</span>
+        </div>
+        <div class="gpu-meter-row">
+          <span class="gpu-meter-label">TFLOPs</span>
+          <div class="gpu-meter-track"><div class="gpu-meter-fill" id="m-tf"   style="width:0%;background:linear-gradient(90deg,var(--green-dim),var(--green))"></div></div>
+          <span class="gpu-meter-val" id="v-tf">0</span>
+        </div>
+      </div>
+      <div style="margin-top:1.25rem;font-family:var(--mono);font-size:0.62rem;color:var(--text-muted);border-top:1px solid var(--border);padding-top:0.75rem;">
+        Peak HBM3e BW: 8 TB/s · FP8 Tensor Cores: 4.5 PFLOP/s · SM count: 160
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Autotune Progress table ── -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(0,229,255,0.1);">🔬</div>
+      <h2>Autotune Progress — gated_deltanet_chunk_fwd_o</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="autotune-card">
+      <table>
+        <thead>
+          <tr>
+            <th>Shape (B,T,H,dH,dV)</th>
+            <th>Status</th>
+            <th>Best Time (ms)</th>
+            <th>Relative</th>
+            <th>num_stages</th>
+            <th>num_warps</th>
+            <th>ACF File</th>
+          </tr>
+        </thead>
+        <tbody id="autotune-tbody">
+          <!-- filled by JS -->
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Config Inspector ── -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon" style="background:rgba(181,123,255,0.1);">⚙️</div>
+      <h2>Config Inspector</h2>
+      <div class="section-line"></div>
+    </div>
+    <div class="config-inspector">
+      <div class="config-header" onclick="toggleConfig()">
+        <div class="config-header-left">
+          <span class="config-toggle" id="config-toggle">▶</span>
+          <span style="font-family:var(--mono);font-size:0.8rem;color:var(--text-primary)">SHAPE_CONFIGS</span>
+          <span style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted)">— gated_deltanet_chunk_fwd_o</span>
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <span class="tag tag-triton">Python</span>
+          <span style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted)">click to expand</span>
+        </div>
+      </div>
+      <div class="config-body" id="config-body">
+        <pre class="code-block" id="config-code"></pre>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  GPU KERNEL PROFILER · HELION HACKATHON 2026 · NVIDIA B200 · Built with Chart.js + Vanilla JS
+</footer>
+
+<!-- ═══════════════════════════════ SCRIPTS ══════════════════════════════ -->
+<script>
+// ── Data ──────────────────────────────────────────────────────────────────
+const AUTOTUNE_DATA = [
+  { shape: '(1,64,2,64,64)',     time: 0.0480, stages: 2, warps: 4, acf: 'chunk_fwd_o_2.acf', done: true  },
+  { shape: '(2,128,4,64,64)',    time: 0.0486, stages: 2, warps: 8, acf: null,                done: true  },
+  { shape: '(1,256,4,64,128)',   time: 0.0493, stages: 1, warps: 8, acf: null,                done: true  },
+  { shape: '(1,64,1,64,64)',     time: 0.0473, stages: 2, warps: 4, acf: 'chunk_fwd_o_4.acf', done: true  },
+  { shape: '(2,512,3,64,64)',    time: null,   stages: null, warps: null, acf: null,           done: false },
+  { shape: '(2,1024,3,64,64)',   time: null,   stages: null, warps: null, acf: null,           done: false },
+  { shape: '(3,1024,4,100,100)', time: null,   stages: null, warps: null, acf: null,           done: false },
+  { shape: '(4,1024,4,128,128)', time: null,   stages: null, warps: null, acf: null,           done: false },
+  { shape: '(2,1536,4,128,128)', time: null,   stages: null, warps: null, acf: null,           done: false },
+  { shape: '(4,2048,8,64,64)',   time: null,   stages: null, warps: null, acf: null,           done: false },
+];
+
+const BEST_TIME = Math.min(...AUTOTUNE_DATA.filter(d => d.done).map(d => d.time));
+
+// ── Clock + Countdown ────────────────────────────────────────────────────
+const HACKATHON_START    = new Date('2026-03-14T09:00:00-08:00').getTime();
+const HACKATHON_DEADLINE = new Date('2026-03-14T18:00:00-08:00').getTime();
+
+function pad2(n) { return String(n).padStart(2,'0'); }
+
+function tick() {
+  const now = Date.now();
+
+  // Clock
+  const d = new Date(now);
+  document.getElementById('clock').textContent =
+    pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+
+  // Countdown to deadline
+  const remaining = HACKATHON_DEADLINE - now;
+  if (remaining > 0) {
+    const totalSec = Math.floor(remaining / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    document.getElementById('cd-h').textContent = pad2(h);
+    document.getElementById('cd-m').textContent = pad2(m);
+    document.getElementById('cd-s').textContent = pad2(s);
+
+    // Color shift as deadline approaches
+    const pct = 1 - remaining / (HACKATHON_DEADLINE - HACKATHON_START);
+    if (pct > 0.85) {
+      document.querySelectorAll('.countdown-time').forEach(el => {
+        el.style.color = 'var(--red)';
+        el.style.textShadow = '0 0 20px rgba(255,71,87,0.5)';
+      });
+    }
+  } else {
+    ['cd-h','cd-m','cd-s'].forEach(id => document.getElementById(id).textContent = '00');
+  }
+
+  // Elapsed
+  const elapsed = now - HACKATHON_START;
+  if (elapsed > 0) {
+    const eS = Math.floor(elapsed / 1000);
+    const eh = Math.floor(eS / 3600);
+    const em = Math.floor((eS % 3600) / 60);
+    const es = eS % 60;
+    document.getElementById('elapsed').textContent =
+      pad2(eh) + 'h ' + pad2(em) + 'm ' + pad2(es) + 's';
+  } else {
+    document.getElementById('elapsed').textContent = 'Not started yet';
+  }
+}
+
+setInterval(tick, 1000);
+tick();
+
+// ── Autotune Table ───────────────────────────────────────────────────────
+(function buildTable() {
+  const tbody = document.getElementById('autotune-tbody');
+  const maxTime = Math.max(...AUTOTUNE_DATA.filter(d=>d.done).map(d=>d.time));
+  const minTime = Math.min(...AUTOTUNE_DATA.filter(d=>d.done).map(d=>d.time));
+
+  AUTOTUNE_DATA.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    tr.style.animationDelay = (i * 0.04) + 's';
+    tr.style.animation = 'fadeInUp 0.4s ease both';
+
+    const isBest = row.done && row.time === minTime;
+    const barWidth = row.done ? Math.round((row.time - minTime * 0.9) / (maxTime - minTime * 0.9 + 0.001) * 80 + 20) : 0;
+
+    tr.innerHTML = `
+      <td class="td-shape">${row.shape}</td>
+      <td>
+        <span class="td-status-dot ${row.done ? 'dot-done' : 'dot-tuning'}"></span>
+        <span style="font-size:0.65rem;color:${row.done ? 'var(--green)' : 'var(--cyan)'}">
+          ${row.done ? 'Done' : 'Tuning…'}
+        </span>
+      </td>
+      <td class="td-time ${row.done ? 'best' : 'tbd'}">
+        ${row.done ? row.time.toFixed(4) : 'TBD'}
+        ${isBest ? '<span style="color:var(--yellow);margin-left:0.35rem;" title="Personal best">★</span>' : ''}
+      </td>
+      <td>
+        <span class="sparkbar ${row.done ? '' : 'tbd'}" style="width:${row.done ? barWidth : 30}px"></span>
+      </td>
+      <td class="td-config">${row.done ? row.stages : '—'}</td>
+      <td class="td-config">${row.done ? row.warps : '—'}</td>
+      <td class="td-acf">${row.acf ? row.acf : (row.done ? '<span style="color:var(--text-muted)">—</span>' : '<span style="color:var(--text-muted)">…</span>')}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+})();
+
+// ── Bar Chart ─────────────────────────────────────────────────────────────
+(function buildChart() {
+  const doneData = AUTOTUNE_DATA.filter(d => d.done);
+  const labels = doneData.map(d => d.shape);
+  const values = doneData.map(d => d.time);
+
+  const colors = doneData.map(d =>
+    d.time === BEST_TIME ? 'rgba(0,255,136,0.85)' : 'rgba(0,229,255,0.65)'
+  );
+  const borderColors = doneData.map(d =>
+    d.time === BEST_TIME ? '#00ff88' : '#00e5ff'
+  );
+
+  const ctx = document.getElementById('perfChart').getContext('2d');
+
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Best Time (ms)',
+        data: values,
+        backgroundColor: colors,
+        borderColor: borderColors,
+        borderWidth: 1,
+        borderRadius: 4,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: {
+        duration: 1200,
+        easing: 'easeOutQuart',
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#162033',
+          borderColor: '#1e3a5f',
+          borderWidth: 1,
+          titleColor: '#00e5ff',
+          bodyColor: '#7fa8c0',
+          titleFont: { family: "'JetBrains Mono', monospace", size: 11 },
+          bodyFont:  { family: "'JetBrains Mono', monospace", size: 11 },
+          callbacks: {
+            label: ctx => ` ${ctx.parsed.y.toFixed(4)} ms`,
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: '#7fa8c0',
+            font: { family: "'JetBrains Mono', monospace", size: 9 },
+            maxRotation: 35,
+          },
+          grid: { color: 'rgba(30,45,69,0.5)' },
+        },
+        y: {
+          ticks: {
+            color: '#7fa8c0',
+            font: { family: "'JetBrains Mono', monospace", size: 10 },
+            callback: v => v.toFixed(3) + ' ms',
+          },
+          grid: { color: 'rgba(30,45,69,0.5)' },
+          border: { dash: [4, 4] },
+          min: 0.045,
+          max: 0.055,
+        }
+      }
+    }
+  });
+})();
+
+// ── GPU Meter Animation ──────────────────────────────────────────────────
+setTimeout(() => {
+  const meters = [
+    { fill: 'm-sm', val: 'v-sm', target: 87, suffix: '%' },
+    { fill: 'm-bw', val: 'v-bw', target: 72, suffix: '%' },
+    { fill: 'm-l2', val: 'v-l2', target: 91, suffix: '%' },
+    { fill: 'm-reg', val: 'v-reg', target: 128, suffix: '', max: 256 },
+    { fill: 'm-occ', val: 'v-occ', target: 68, suffix: '%' },
+    { fill: 'm-tf',  val: 'v-tf',  target: 3.2, suffix: 'T', max: 4.5, isFloat: true },
+  ];
+
+  meters.forEach(m => {
+    const fillEl = document.getElementById(m.fill);
+    const valEl  = document.getElementById(m.val);
+    const max = m.max || 100;
+    const pct = (m.target / max) * 100;
+    fillEl.style.width = pct + '%';
+    valEl.textContent  = (m.isFloat ? m.target.toFixed(1) : m.target) + m.suffix;
+  });
+}, 400);
+
+// ── Config Inspector ─────────────────────────────────────────────────────
+function toggleConfig() {
+  const body   = document.getElementById('config-body');
+  const toggle = document.getElementById('config-toggle');
+  const open   = body.classList.toggle('open');
+  toggle.classList.toggle('open', open);
+}
+
+// Build the code block with fake syntax highlighting
+(function buildConfig() {
+  const codeEl = document.getElementById('config-code');
+
+  const configs = AUTOTUNE_DATA
+    .filter(d => d.done)
+    .map(d => {
+      const parts = [`\n        <span class="str">"num_stages"</span><span class="op">:</span> <span class="num">${d.stages}</span>, <span class="str">"num_warps"</span><span class="op">:</span> <span class="num">${d.warps}</span>`];
+      if (d.acf) {
+        parts.push(`, <span class="str">"acf"</span><span class="op">:</span> <span class="str">"${d.acf}"</span>`);
+      }
+      return `    <span class="str">${d.shape}</span><span class="op">:</span> {${parts.join('')}\n    }`;
+    }).join(',\n');
+
+  codeEl.innerHTML = `<span class="cm"># Hardcoded autotune configs for gated_deltanet_chunk_fwd_o</span>
+<span class="cm"># Generated: ${new Date().toISOString().slice(0,16).replace('T',' ')} UTC</span>
+<span class="cm"># B200 · Triton kernel · Best-of-sweep</span>
+
+<span class="kw">SHAPE_CONFIGS</span><span class="op"> = </span>{
+${configs},
+
+    <span class="cm"># Shapes still tuning — fallback to sweep</span>
+    <span class="str">"(2,512,3,64,64)"</span><span class="op">:</span>    <span class="kw">None</span>,
+    <span class="str">"(2,1024,3,64,64)"</span><span class="op">:</span>   <span class="kw">None</span>,
+    <span class="str">"(3,1024,4,100,100)"</span><span class="op">:</span> <span class="kw">None</span>,
+    <span class="str">"(4,1024,4,128,128)"</span><span class="op">:</span> <span class="kw">None</span>,
+    <span class="str">"(2,1536,4,128,128)"</span><span class="op">:</span> <span class="kw">None</span>,
+    <span class="str">"(4,2048,8,64,64)"</span><span class="op">:</span>   <span class="kw">None</span>,
+}
+
+<span class="kw">def</span> <span class="fn">get_config</span>(shape<span class="op">:</span> <span class="fn">tuple</span>) <span class="op">-></span> <span class="fn">dict</span><span class="op"> | </span><span class="kw">None</span>:
+    <span class="str">"""Return hardcoded config for a given shape, or None to run autotune."""</span>
+    key <span class="op">=</span> <span class="fn">str</span>(shape)
+    <span class="kw">return</span> SHAPE_CONFIGS.get(key, <span class="kw">None</span>)
+`;
+})();
+
+// ── Stagger fadeInUp delays on leaderboard cards ──────────────────────────
+document.querySelectorAll('.stats-row .stat-card').forEach((el, i) => {
+  el.style.animationDelay = (i * 0.05) + 's';
+});
+</script>
+</body>
+</html>
