@@ -19,10 +19,12 @@ fi
 
 echo "Starting remote experiment: $MODE on $PROBLEM"
 
+export COMMAND="cd ~/Battlestars && git pull origin hackathon && cd helion && source ~/helion_env/bin/activate && export HELION_AUTOTUNE_PRECOMPILE=spawn && python eval.py $MODE $PROBLEM/"
+
 # Pass expect script via -c to ssh and run command
 /usr/bin/expect -c '
 set timeout -1
-spawn ssh -o StrictHostKeyChecking=accept-new "$env(username)@$env(host)" "cd ~/Battlestars && git pull origin hackathon && cd helion && source ~/helion_env/bin/activate && export HELION_AUTOTUNE_PRECOMPILE=spawn && python eval.py '"$MODE"' '"$PROBLEM"'/"
+spawn ssh -o StrictHostKeyChecking=accept-new "$env(username)@$env(host)" "$env(COMMAND)"
 expect "*assword:*"
 send "$env(password)\r"
 expect eof

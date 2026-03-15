@@ -19,7 +19,7 @@ def parse_benchmarks(content):
             label = f"({shape_dict.get('B')},{shape_dict.get('T') or shape_dict.get('D') or shape_dict.get('num_tokens')})"
             # We want to format the shape nicely for the UI
             full_shape = "(" + ",".join(str(v) for k,v in shape_dict.items() if k != 'seed') + ")"
-            chart_data.append({"shape": full_shape, "time": mean_ms, "stages": "-", "warps": "-", "acf": "-", "done": True})
+            chart_data.append({"shape": full_shape, "time": mean_ms, "metric": "Mean Latency", "done": True})
         except Exception as e:
             pass
     return chart_data
@@ -34,15 +34,15 @@ def parse_profiles(content):
                 table_str = parts[i+1]
                 full_shape = "(" + ",".join(str(v) for k,v in shape_dict.items() if k != 'seed') + ")"
                 
-                match = re.search(r"^\s*_helion_kernel\s+(?:[\d\.]+%?\s+){4}[\d\.]+[a-z]+\s+([\d\.]+)(us|ms)\s+([\d\.]+)%", table_str, re.MULTILINE)
+                match = re.search(r"^\s*_helion_kernel\s+(?:[^\s]+\s+){5}([\d\.]+)(us|ms)\s+([\d\.]+)%", table_str, re.MULTILINE)
                 if match:
                     time_val = float(match.group(1))
                     unit = match.group(2)
                     if unit == "us":
                         time_val = time_val / 1000.0
-                    chart_data.append({"shape": full_shape, "time": time_val, "stages": "-", "warps": "-", "acf": "-", "done": True})
+                    chart_data.append({"shape": full_shape, "time": time_val, "metric": f"{match.group(3)}% CUDA", "done": True})
                 else:
-                    chart_data.append({"shape": full_shape, "time": 0.0, "stages": "-", "warps": "-", "acf": "-", "done": True})
+                    chart_data.append({"shape": full_shape, "time": 0.0, "metric": "Error/Not Found", "done": True})
             except Exception as e:
                 pass
     return chart_data
@@ -533,6 +533,10 @@ fetchLogs();
 </body>
 </html>
 """
+
+@app.route('/')
+def index():
+    return render_template_string(TEMPLATE)
 
 @app.route('/api/logs')
 def api_logs():

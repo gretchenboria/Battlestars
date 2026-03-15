@@ -8,12 +8,12 @@ else
     exit 1
 fi
 
-COMMAND="$*"
+export COMMAND="$*"
 
 # Pass expect script via -c
 /usr/bin/expect -c '
 set timeout 300
-spawn ssh -o StrictHostKeyChecking=accept-new "$env(username)@$env(host)" '"$COMMAND"'
+spawn ssh -o StrictHostKeyChecking=accept-new "$env(username)@$env(host)" "$env(COMMAND)"
 expect "*assword:*"
 send "$env(password)\r"
 expect eof
