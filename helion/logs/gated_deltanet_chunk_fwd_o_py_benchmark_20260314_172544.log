@@ -1,0 +1,5 @@
+
+Running 3 benchmarks...
+  Benchmark 0: 0.0597 ms (min=0.0596, max=0.0604)  {'B': 1, 'T': 64, 'H': 1, 'K': 64, 'V': 64, 'seed': 31232}
+  Benchmark 1: 0.0245 ms (min=0.0244, max=0.0246)  {'B': 2, 'T': 512, 'H': 3, 'K': 64, 'V': 64, 'seed': 4052}
+  Benchmark 2: 0.0535 ms (min=0.0534, max=0.0541)  {'B': 2, 'T': 1024, 'H': 3, 'K': 64, 'V': 64, 'seed': 2146}
